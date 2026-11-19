@@ -1,0 +1,15 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/.venv/
+*.egg-info/
+/build/
+/dist/
+
+# Local environment files
+/.env
+/.env.*
+!/.env.example
+
+.DS_Store

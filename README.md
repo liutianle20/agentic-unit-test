@@ -1,6 +1,52 @@
-# ReAct pytest preview
+# Agentic Unit Test Generator
 
-Set `OPENAI_MODEL` and `OPENAI_API_KEY`. Set `OPENAI_BASE_URL` if using a different OpenAI-compatible chat completions endpoint. The endpoint and model must support function tool calls.
+Generate pytest tests for Python code from a plain-language goal. The evaluation harness compares ReAct and Plan-and-Execute with a single-shot baseline.
+
+## Project structure
+
+```text
+.
+├── unit-agent/                     # Agent and baseline source
+│   ├── collect.py                  # Run methods and save attempts
+│   └── evaluate.py                 # Grade saved attempts and report metrics
+├── fixtures/
+│   └── sample_project/             # Code under test and reference tests
+├── tests/                          # Agent and evaluator tests
+├── tasks.jsonl                     # 50 evaluation tasks and rubrics
+├── eval-results/
+│   └── full-report/
+│       ├── attempts.jsonl          # Per-attempt verdicts and evidence
+│       └── results.md              # Full evaluation report
+├── eval-harness-submission/        # Standalone submission package
+├── pyproject.toml                  # Package configuration and dependencies
+└── uv.lock                         # Locked dependency versions
+```
+
+## Quick start
+
+Install Python 3.11 or newer and `uv`. On macOS with Homebrew, run:
+
+```bash
+brew install python uv
+python3 --version
+uv --version
+```
+
+From the repository root, set your model ID and API key in Bash. Use a model and endpoint that support function tool calls.
+
+```bash
+export OPENAI_MODEL='<model-id>'
+
+export OPENAI_API_KEY='<your-api-key>'
+```
+
+For a different OpenAI-compatible endpoint, also set its API base URL:
+
+```bash
+export OPENAI_BASE_URL='<provider-api-base-url>'
+```
+
+The source folder is `unit-agent/`. The installed Python package is `unit_agent`, and the CLI command is `unit-agent`. Use `uv run` to install the package and run the commands below.
 
 ```sh
 uv run unit-agent --repo fixtures/sample_project --goal "Test the maximum allowed retries."
@@ -25,25 +71,37 @@ The baseline returns `staged` and a diff when it receives a candidate. It leaves
 `tests` and `coverage` empty for the evaluator to fill. Python callers can import
 `run_baseline` from `unit_agent.baseline`.
 
-## Shared evaluator
+## Collect and grade attempts
 
-Run the two-task smoke evaluation from the repository root with the model and
-API credentials configured. Choose a new output directory for each run.
+From the repository root, choose new output directories. The collector runs one
+single-shot baseline attempt and three trials each for ReAct and Plan-and-Execute
+on every selected task. A full run collects 350 records across all 50 tasks.
 
 ```sh
-uv run --env-file .env.deepseek python -m unit_agent.evaluate \
-  --tasks tasks.jsonl --task validation-02 --task unanswerable-01 \
-  --output eval-results/smoke
+run_id=$(date +%Y%m%d-%H%M%S)
+uv run python -m unit_agent.collect \
+  --tasks tasks.jsonl --output "eval-results/full-generation-$run_id"
+
+uv run python -m unit_agent.evaluate \
+  --input "eval-results/full-generation-$run_id" \
+  --output "eval-results/full-report-$run_id"
 ```
 
-The evaluator runs one single-shot attempt and three ReAct attempts per selected
-task. It grades the candidates independently with pytest and model rubric checks.
-The report compares single-shot with ReAct trial one. ReAct consistency uses all
-three trials. See `results.md` for the report. Each line of `attempts.jsonl`
-contains one versioned attempt with task details, model, method, trial, verdict,
-normalized metrics, and generation, pytest, judge, and mutation evidence.
-Unavailable metrics are JSON `null`.
-Omit the task flags when ready to run the full 50-task submission evaluation.
+If you store credentials in a local environment file, add `--env-file <path>` after `uv run`.
+
+For a smoke run, add `--task validation-02` to the collection command and use
+separate output directories. Repeat `--task` to select more tasks.
+
+The collector writes `manifest.json` and `generation.jsonl` with the candidate
+diffs, traces, and generation statistics. The grader reads those files and needs
+the same fixture paths and contents. It uses pytest and a configured model judge
+to grade saved candidates. You can grade the same collection again with a fresh
+report directory.
+
+Both commands show record counts on stderr. The grader writes `attempts.jsonl`
+with per-attempt evidence and `results.md` with side-by-side metrics, consistency
+across three agent trials, and a failure trace when an attempt fails. Unavailable
+metrics are JSON `null`.
 
 ## Plan-and-Execute
 
@@ -52,9 +110,6 @@ replans when tests fail or repository evidence invalidates a step. It uses the
 same tools and workspace as ReAct.
 
 ```sh
-uv run --env-file .env.deepseek unit-agent --method plan-execute \
+uv run unit-agent --method plan-execute \
   --repo fixtures/sample_project --goal "Test the maximum allowed retries."
 ```
-
-Add `--include-plan-execute` to the shared evaluator to add three trials per
-task and a separate consistency section for Plan-and-Execute.

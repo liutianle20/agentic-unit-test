@@ -1,44 +1,20 @@
-"""Run and grade ReAct and single-shot on the same tasks."""
+"""Grade collected attempts and report evaluation metrics."""
 
 import argparse
-from dataclasses import asdict
+from dataclasses import fields
 import json
-from math import ceil
+from math import ceil, isfinite
 from pathlib import Path
 import re
 from statistics import mean
-from time import monotonic
 from xml.etree.ElementTree import ParseError
 
 from openai import OpenAI, OpenAIError
 
-from . import ModelConfig, _final_json, _preview_workspace, run_agent, run_plan_execute
-from .baseline import run_baseline
+from . import AgentResult, ModelConfig, _final_json, _preview_workspace
+from .eval_records import SCHEMA_VERSION, TASK_FIELDS, TRIALS, Progress, describe_tasks, task_keys, write_record
 
 STANDARD_CHECKS = ["Correct", "Grounded", "Complete", "In policy"]
-
-
-def read_tasks(path, selected):
-    tasks = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    by_id = {task["id"]: task for task in tasks}
-    if len(by_id) != len(tasks):
-        raise ValueError("Task IDs must be unique")
-    for task in tasks:
-        if (task["type"] not in ("rubric", "unanswerable")
-                or not isinstance(task["question"], str) or not task["question"].strip()
-                or not isinstance(task["rubric"], list) or not task["rubric"]
-                or any(not isinstance(item, str) or not item.strip() for item in task["rubric"])):
-            raise ValueError(f"Invalid task: {task['id']}")
-        task["fixture"] = str((path.parent / task["fixture"]).resolve(strict=True))
-    if selected:
-        unknown = set(selected) - by_id.keys()
-        if unknown:
-            raise ValueError(f"Unknown task IDs: {', '.join(sorted(unknown))}")
-        return [task for task in tasks if task["id"] in selected]
-    if (len(tasks) != 50 or sum("edge-case" in task["tags"] for task in tasks) < 3
-            or sum(task["type"] == "unanswerable" for task in tasks) < 2):
-        raise ValueError("Full eval requires 50 tasks, at least 3 edge cases, and 2 unanswerable tasks")
-    return tasks
 
 
 def stage_diff(workspace, diff):
@@ -96,20 +72,15 @@ def fail(record, stage, reason):
     return record
 
 
-def evaluate_attempt(task, method, trial, generate, config, judge):
+def evaluate_attempt(task, saved, config, judge):
     record = {
-        "task_id": task["id"], "method": method, "trial": trial,
-        "generation": None, "generation_seconds": None, "execution": None,
-        "judge_checks": None, "mutation": None,
+        "task_id": task["id"], "method": saved["method"], "trial": saved["trial"],
+        "generation": saved["generation"], "generation_seconds": saved["generation_seconds"],
+        "execution": None, "judge_checks": None, "mutation": None,
     }
-    started = monotonic()
-    try:
-        result = generate(task["fixture"], task["question"], config)
-    except (OSError, ValueError, OpenAIError) as error:
-        record["generation_seconds"] = monotonic() - started
-        return fail(record, "generation", f"Generation raised {type(error).__name__}.")
-    record["generation_seconds"] = monotonic() - started
-    record["generation"] = asdict(result)
+    if saved["failure_reason"] is not None:
+        return fail(record, "generation", saved["failure_reason"])
+    result = AgentResult(**saved["generation"])
 
     try:
         with _preview_workspace(task["fixture"], task["question"], config) as workspace:
@@ -270,6 +241,16 @@ def render_report(records, tasks, *, include_plan_execute=False):
     if failures:
         failure = failures[0]
         reason = " ".join(failure["failure_reason"].split())
+        trace = (failure["generation"] or {}).get("tool_trace", [])
+        last_step = next((event for event in reversed(trace) if event.get("event")), None)
+        if last_step is None and trace:
+            last_tool = trace[-1]
+            last_step = {"tool": last_tool.get("tool")}
+            if "error" in last_tool.get("result", {}):
+                last_step["error"] = last_tool["result"]["error"]
+        if last_step is not None:
+            detail = json.dumps(last_step, ensure_ascii=False)
+            reason += f" Last recorded agent step: {detail[:500]}."
         report.extend(["", "## Failure trace", "",
                        f"{failure['task_id']} ({failure['method']}, trial {failure['trial']}) "
                        f"failed at the {failure['failure_stage']} step. {reason} "
@@ -289,7 +270,7 @@ def render_report(records, tasks, *, include_plan_execute=False):
     return "\n".join(report) + "\n"
 
 
-def structure_attempt(record, task, model):
+def structure_attempt(record, task, model, judge_model):
     """Attach the context and normalized metrics needed to read a line on its own."""
     generation = record["generation"] or {}
     usage = generation.get("token_usage")
@@ -301,7 +282,8 @@ def structure_attempt(record, task, model):
         **record,
         "schema_version": 1,
         "model": model,
-        "task": {key: task[key] for key in ("id", "type", "question", "fixture", "tags", "rubric")},
+        "judge_model": judge_model,
+        "task": {key: task[key] for key in TASK_FIELDS},
         "failure_stage": record.get("failure_stage"),
         "failure_reason": record.get("failure_reason"),
         "metrics": {
@@ -319,44 +301,99 @@ def structure_attempt(record, task, model):
     }
 
 
-def run_evaluation(tasks, output, config, judge, baseline=run_baseline, react=run_agent,
-                   *, plan_execute=None):
+def load_collection(input_dir):
+    manifest = json.loads((input_dir / "manifest.json").read_text(encoding="utf-8"))
+    if manifest["schema_version"] != SCHEMA_VERSION or manifest["trials"] != TRIALS:
+        raise ValueError("Unsupported collection schema or trial counts")
+    tasks = manifest["tasks"]
+    model = manifest["model"]
+    if not tasks or not isinstance(model, str) or not model.strip():
+        raise ValueError("Collection requires tasks and a generation model")
+    by_id = {task["id"]: task for task in tasks}
+    if len(tasks) != len(by_id):
+        raise ValueError("Duplicate task IDs in collection manifest")
+    keys = task_keys(tasks)
+    expected = set(keys)
+    records = {}
+    generation_fields = {field.name for field in fields(AgentResult)}
+    with (input_dir / "generation.jsonl").open(encoding="utf-8") as log:
+        for number, line in enumerate(log, 1):
+            try:
+                row = json.loads(line)
+                key = row["task_id"], row["method"], row["trial"]
+                if key not in expected or type(row["trial"]) is not int:
+                    raise ValueError(f"Unexpected attempt {key}")
+                if key in records:
+                    raise ValueError(f"Duplicate attempt {key}")
+                if (row["schema_version"] != SCHEMA_VERSION or row["model"] != model
+                        or row["task"] != by_id[key[0]]):
+                    raise ValueError("Record metadata differs from the collection manifest")
+                elapsed = row["generation_seconds"]
+                if type(elapsed) not in (int, float) or not isfinite(elapsed) or elapsed < 0:
+                    raise ValueError("Invalid generation time")
+                generation, failure = row["generation"], row["failure_reason"]
+                if failure is None:
+                    if not isinstance(generation, dict) or generation.keys() != generation_fields:
+                        raise ValueError("Invalid generation result")
+                    if (any(not isinstance(generation[field], str) for field in ("outcome", "diff"))
+                            or not isinstance(generation["unresolved_issues"], list)
+                            or any(not isinstance(issue, str) for issue in generation["unresolved_issues"])
+                            or not isinstance(generation["tool_trace"], list)
+                            or any(not isinstance(event, dict) for event in generation["tool_trace"])
+                            or type(generation["model_turns"]) is not int):
+                        raise ValueError("Invalid generation result fields")
+                    usage = generation["token_usage"]
+                    if usage is not None and (not isinstance(usage, dict)
+                            or usage.keys() != {"input_tokens", "output_tokens"}
+                            or any(type(value) is not int or value < 0 for value in usage.values())):
+                        raise ValueError("Invalid token counts")
+                elif generation is not None or not isinstance(failure, str) or not failure.strip():
+                    raise ValueError("Invalid generation failure")
+                records[key] = row
+            except (ValueError, TypeError, KeyError) as error:
+                raise ValueError(f"generation.jsonl line {number}: {error}") from error
+    if expected - records.keys():
+        missing = [key for key in keys if key not in records]
+        raise ValueError(f"Missing {len(missing)} of {len(keys)} attempts, starting with {missing[0]}")
+    for saved, current in zip(tasks, describe_tasks(tasks)):
+        if saved["fixture_fingerprint"] != current["fixture_fingerprint"]:
+            raise ValueError(f"Fixture changed since collection: {saved['fixture']}")
+    return tasks, [records[key] for key in keys], model
+
+
+def run_evaluation(input_dir, output, config, judge):
+    tasks, saved_attempts, model = load_collection(input_dir)
+    by_id = {task["id"]: task for task in tasks}
     output.mkdir(parents=True, exist_ok=False)
+    progress = Progress("Grading", len(saved_attempts))
     records = []
-    methods = [("baseline", baseline, 1), ("react", react, 3)]
-    if plan_execute is not None:
-        methods.append(("plan-execute", plan_execute, 3))
     with (output / "attempts.jsonl").open("x", encoding="utf-8") as log:
-        for task in tasks:
-            for method, generate, trials in methods:
-                for trial in range(1, trials + 1):
-                    record = evaluate_attempt(task, method, trial, generate, config, judge)
-                    record = structure_attempt(record, task, config.model)
-                    records.append(record)
-                    log.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    log.flush()
-    report = render_report(records, tasks, include_plan_execute=plan_execute is not None)
-    (output / "results.md").write_text(report, encoding="utf-8")
+        for completed, saved in enumerate(saved_attempts, 1):
+            task = by_id[saved["task_id"]]
+            record = evaluate_attempt(task, saved, config, judge)
+            record = structure_attempt(record, task, model, config.model)
+            records.append(record)
+            write_record(log, record)
+            progress.update(completed)
+    report = render_report(records, tasks, include_plan_execute=True)
+    models = f"Generation model: {model}\n\nJudge model: {config.model}\n"
+    (output / "results.md").write_text(report + "\n" + models, encoding="utf-8")
     return records
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tasks", type=Path, default=Path("tasks.jsonl"))
+    parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--task", action="append", default=[], help="Task ID, repeat to select several")
-    parser.add_argument("--include-plan-execute", action="store_true")
     args = parser.parse_args()
     config = ModelConfig.from_env()
     if not config.model.strip():
         parser.error("Set OPENAI_MODEL")
     try:
-        tasks = read_tasks(args.tasks, args.task)
         with OpenAI(base_url=config.base_url, api_key=config.api_key, max_retries=0) as client:
-            run_evaluation(tasks, args.output, config,
-                           lambda *evidence: judge_attempt(client, config.model, *evidence),
-                           plan_execute=run_plan_execute if args.include_plan_execute else None)
-    except (OSError, ValueError, KeyError, OpenAIError) as error:
+            run_evaluation(args.input, args.output, config,
+                           lambda *evidence: judge_attempt(client, config.model, *evidence))
+    except (OSError, ValueError, TypeError, KeyError, OpenAIError) as error:
         parser.exit(2, f"{parser.prog}: {error}\n")
     print(args.output / "results.md")
 
