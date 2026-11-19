@@ -58,6 +58,25 @@ Use trusted repositories. Pytest executes generated Python in a temporary copy w
 
 Run the scripted acceptance checks with `uv run python -m pytest -q tests`.
 
+## Streamlit preview
+
+With the model environment variables set as above, start the local app from the repository root.
+
+```sh
+uv run --extra ui streamlit run app.py --server.address 127.0.0.1
+```
+
+If your provider settings are in an env file, pass it at launch. For a local
+DeepSeek configuration saved in `.env.deepseek`, use:
+
+```sh
+uv run --env-file .env.deepseek --extra ui streamlit run app.py --server.address 127.0.0.1
+```
+
+Choose a repository, goal, and method to see the generated diff, verification
+results, run metrics, and tool trace. Use trusted repositories because verification
+runs generated pytest code with your OS permissions.
+
 ## Single-shot baseline
 
 Run one model call with the goal, Python source, and existing tests:
