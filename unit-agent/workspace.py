@@ -10,6 +10,13 @@ import subprocess
 import sys
 from xml.etree import ElementTree
 
+from .security import (
+    is_sensitive_path,
+    prompt_injection_reasons,
+    redact_sensitive_text,
+    validate_test_source,
+)
+
 IGNORED = {".git", ".venv", "__pycache__", ".pytest_cache", ".env", ".coverage"}
 READ_LIMIT = 32_768
 TEST_PATH = re.compile(r"tests/test_agent_[A-Za-z0-9_]+\.py")
@@ -18,7 +25,8 @@ TEST_PATH = re.compile(r"tests/test_agent_[A-Za-z0-9_]+\.py")
 def ignore_files(directory, names):
     return [
         name for name in names
-        if name in IGNORED or name.startswith(".env.") or (Path(directory) / name).is_symlink()
+        if (name in IGNORED or is_sensitive_path(Path(directory) / name)
+            or (Path(directory) / name).is_symlink())
     ]
 
 
@@ -32,6 +40,8 @@ class Workspace:
         path = Path(value)
         if path.is_absolute() or ".." in path.parts:
             raise ValueError("Expected a workspace-relative path")
+        if is_sensitive_path(path):
+            raise ValueError("Sensitive paths are not available to the agent")
         current = self.root
         for part in path.parts:
             current = current / part
@@ -46,7 +56,8 @@ class Workspace:
         return [
             str(path.relative_to(self.root))
             for path in sorted(self.root.glob(pattern))
-            if path.is_file() and self.path(str(path.relative_to(self.root)))
+            if (path.is_file() and not is_sensitive_path(path.relative_to(self.root))
+                and self.path(str(path.relative_to(self.root))))
         ][:200]
 
     def read_file(self, path):
@@ -55,13 +66,23 @@ class Workspace:
             raise ValueError("Expected a regular file")
         with file.open("rb") as source:
             data = source.read(READ_LIMIT + 1)
-        return {"text": data[:READ_LIMIT].decode("utf-8", errors="replace"),
-                "truncated": len(data) > READ_LIMIT}
+        text = data[:READ_LIMIT].decode("utf-8", errors="replace")
+        text, sensitive = redact_sensitive_text(text)
+        injection = prompt_injection_reasons(text)
+        security = {"trust": "untrusted_repository_content"}
+        if sensitive:
+            security["redacted"] = sensitive
+        if injection:
+            security["prompt_injection_detected"] = injection
+            text = "[CONTENT WITHHELD: possible prompt injection detected]"
+        return {"text": text, "truncated": len(data) > READ_LIMIT, "security": security}
 
     def inspect_python(self, path):
         source = self.read_file(path)
         if source["truncated"]:
             raise ValueError("Source exceeds the AST inspection limit")
+        if source["security"].get("prompt_injection_detected"):
+            raise ValueError("Possible prompt injection detected in repository content")
         tree = ast.parse(source["text"])
         return [
             {"line": node.lineno, "kind": type(node).__name__, "definition": definition}
@@ -85,6 +106,7 @@ class Workspace:
             raise ValueError("Use tests/test_agent_<name>.py")
         if not content.strip() or len(content.encode()) > READ_LIMIT:
             raise ValueError("Expected nonempty test content within the size limit")
+        validate_test_source(content)
         file = self.path(path)
         if file.exists() and path not in self.staged:
             raise ValueError("Existing repository files cannot be overwritten")
@@ -135,8 +157,18 @@ class Workspace:
         status = {0: "passed", 1: "failed"}.get(completed.returncode, "error")
         if completed.stdout.strip().endswith("No module named pytest"):
             status = "error"
+        output, redacted = redact_sensitive_text(completed.stdout[-8000:])
+        injection = prompt_injection_reasons(output)
+        if injection:
+            output = "[OUTPUT WITHHELD: possible prompt injection detected]"
         result = {"status": status, "revision": self.revision,
-                  "exit_code": completed.returncode, "output": completed.stdout[-8000:]}
+                  "exit_code": completed.returncode, "output": output}
+        if redacted or injection:
+            result["security"] = {}
+            if redacted:
+                result["security"]["redacted"] = redacted
+            if injection:
+                result["security"]["prompt_injection_detected"] = injection
         if counts and completed.returncode in (0, 1, 5) and junit.is_file() and not junit.is_symlink():
             cases = list(ElementTree.parse(junit).iter("testcase"))
             result["test_counts"] = {

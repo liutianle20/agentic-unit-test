@@ -41,6 +41,17 @@ The client uses OpenAI's default endpoint unless you set `OPENAI_BASE_URL`. For 
 export OPENAI_BASE_URL='<provider-api-base-url>'
 ```
 
+## Educational safety controls
+
+This standalone copy includes the same basic safeguards as the main project:
+direct and repository prompt-injection screening (LLM01), sensitive-file
+exclusion and output/log redaction (LLM02), bounded tools plus an AST gate before
+generated tests execute (LLM06), and a code-enforced `ready` state requiring
+inspected repository evidence, passing tests, and coverage (LLM09). These controls
+are for teaching and defense in depth; pytest still runs with the current user's
+OS permissions. Use trusted repositories, and use a network-disabled container or
+VM for production workloads.
+
 ## Run the full evaluation
 
 Run from the submission folder. Choose two output paths that do not exist yet. The script runs one baseline attempt and three trials per agent on each of the 50 tasks, then grades all 350 attempts. Both stages print progress to stderr.

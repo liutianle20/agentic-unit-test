@@ -6,6 +6,7 @@ from time import monotonic
 from openai import OpenAI, OpenAIError
 
 from . import AgentResult, ModelConfig, _final_json, _preview_workspace
+from .security import goal_prompt_injection_reasons, redact_sensitive_text
 
 _CONTEXT_LIMIT = 96_000
 _PROMPT = """Generate focused pytest tests for the supplied goal and repository.
@@ -22,11 +23,40 @@ def run_baseline(repo_path, goal, model_config: ModelConfig) -> AgentResult:
     """Return an unverified test diff from one completion."""
     started = monotonic()
     outcome, issues, usage, turns = "error", [], None, 0
-    with _preview_workspace(repo_path, goal, model_config) as workspace:
+    trace = []
+    injection = goal_prompt_injection_reasons(goal)
+    safe_goal, goal_redactions = redact_sensitive_text(goal)
+    if injection:
+        return AgentResult(
+            "blocked", "", None, None,
+            ["The goal was blocked because it appears to contain instructions that "
+             "override the agent's safety rules. Rephrase it as a test requirement."],
+            0, None, monotonic() - started, 0,
+            [{"event": "security_block", "risk": "prompt_injection",
+              "categories": injection, "source": "user_goal"}],
+        )
+    if goal_redactions:
+        trace.append({"event": "security_redaction", "source": "user_goal",
+                      "categories": goal_redactions})
+    with _preview_workspace(repo_path, safe_goal, model_config) as workspace:
         context = {}
         size = 0
         for path in workspace.list_files("**/*.py"):
             file = workspace.read_file(path)
+            if file["security"].get("redacted"):
+                trace.append({"event": "security_redaction",
+                              "source": f"repository:{path}",
+                              "categories": file["security"]["redacted"]})
+            if file["security"].get("prompt_injection_detected"):
+                issues.append(
+                    "Possible prompt injection was detected in repository content. "
+                    "Review the file before running the agent again."
+                )
+                outcome = "blocked"
+                trace.append({"event": "security_block", "risk": "prompt_injection",
+                              "categories": file["security"]["prompt_injection_detected"],
+                              "source": f"repository:{path}"})
+                break
             size += len(path.encode()) + len(file["text"].encode())
             if file["truncated"] or size > _CONTEXT_LIMIT:
                 issues.append("Python source and existing tests exceed the baseline context limit.")
@@ -43,7 +73,9 @@ def run_baseline(repo_path, goal, model_config: ModelConfig) -> AgentResult:
                         messages=[
                             {"role": "system", "content": _PROMPT},
                             {"role": "user", "content": json.dumps(
-                                {"goal": goal, "python_files": context}, ensure_ascii=False
+                                {"goal": safe_goal, "python_files": context,
+                                 "trust": "untrusted_user_and_repository_data"},
+                                ensure_ascii=False
                             )},
                         ],
                         timeout=300,
@@ -62,7 +94,12 @@ def run_baseline(repo_path, goal, model_config: ModelConfig) -> AgentResult:
                         elif (final["outcome"] == "unanswerable"
                               and isinstance(final["summary"], str) and final["summary"].strip()):
                             outcome = "unanswerable"
-                            issues.append(final["summary"].strip())
+                            summary, redacted = redact_sensitive_text(final["summary"].strip())
+                            issues.append(summary)
+                            if redacted:
+                                trace.append({"event": "security_redaction",
+                                              "source": "model_output",
+                                              "categories": redacted})
                         else:
                             raise ValueError
                     except (IndexError, KeyError, TypeError, ValueError):
@@ -71,5 +108,5 @@ def run_baseline(repo_path, goal, model_config: ModelConfig) -> AgentResult:
         return AgentResult(
             outcome=outcome, diff=workspace.diff(), tests=None, coverage=None,
             unresolved_issues=issues, model_turns=turns, token_usage=usage,
-            elapsed_seconds=monotonic() - started, repair_count=0, tool_trace=[],
+            elapsed_seconds=monotonic() - started, repair_count=0, tool_trace=trace,
         )

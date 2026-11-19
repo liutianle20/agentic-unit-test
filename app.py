@@ -7,6 +7,7 @@ import streamlit as st
 
 from unit_agent import ModelConfig, run_agent, run_plan_execute
 from unit_agent.baseline import run_baseline
+from unit_agent.security import redact_sensitive_text
 
 
 METHODS = {
@@ -67,6 +68,7 @@ def main():
         if not defaults.api_key:
             st.info("Set OPENAI_API_KEY in the environment and restart Streamlit.")
         st.caption("Use trusted repositories. Verification executes generated Python locally.")
+        st.caption("Safety checks are educational defense in depth, not an OS sandbox.")
         submitted = st.form_submit_button("Run preview", type="primary")
 
     if submitted:
@@ -86,7 +88,8 @@ def main():
         except (OSError, ValueError, OpenAIError) as error:
             st.session_state["preview_error"] = str(error)
         else:
-            st.session_state["preview_result"] = (method, repo, goal.strip(), config.model, result)
+            display_goal, _ = redact_sensitive_text(goal.strip())
+            st.session_state["preview_result"] = (method, repo, display_goal, config.model, result)
             st.session_state.pop("preview_error", None)
 
     error = st.session_state.get("preview_error")
