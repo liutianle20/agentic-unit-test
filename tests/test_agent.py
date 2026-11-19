@@ -321,3 +321,94 @@ def test_plan_execute_finalizes_on_last_allowed_model_turn(monkeypatch):
     assert result.outcome == "ready"
     assert result.tests["status"] == "passed"
     assert len(requests) == result.model_turns == 20
+
+
+@pytest.mark.parametrize("manage_memory", [True, False])
+def test_retrieval_and_tool_response_window(monkeypatch, manage_memory):
+    from unit_agent.retrieval import CLEARED
+
+    requests = setup_model(monkeypatch, enumerate([
+        ("search_repo", {"query": "retries"}),
+        ("read_lines", {"path": "validation.py", "start": 1, "end": 20}),
+        ("read_lines", {"path": "../outside.py", "start": 1, "end": 2}),
+        ("inspect_python", {"path": "validation.py"}),
+        stage(5), ("get_coverage", {"target": "."}),
+        {"outcome": "ready", "summary": ""},
+    ]))
+    result = run_agent(FIXTURE, TASK["question"], ModelConfig("scripted"),
+                       manage_memory=manage_memory)
+    assert result.outcome == "ready" and result.coverage
+    trace = result.tool_trace
+    assert "validation.py" in {hit["path"] for hit in trace[0]["result"]["results"]}
+    assert "def retries" in trace[1]["result"]["text"]
+    assert "workspace-relative" in trace[2]["result"]["error"]
+    tools = [item for item in requests[-1]["messages"] if item["role"] == "tool"]
+    assert [item["tool_call_id"] for item in tools] == [f"call-{i}" for i in range(6)]
+    assert [item["content"] == CLEARED for item in tools] == [manage_memory] * 2 + [False] * 4
+    assert all(item["role"] != "tool" for item in requests[0]["messages"])
+
+
+def test_chat_recalls_older_results_and_keeps_verified_candidate(monkeypatch):
+    from unit_agent.chat import AgentChat
+
+    ready = {"outcome": "ready", "summary": "Verified retry boundary."}
+    requests = setup_model(monkeypatch, enumerate([
+        ("read_file", {"path": "validation.py"}),
+        stage(5), ("get_coverage", {"target": "."}), ready,
+        "The first test checks the upper limit.",
+        "The test was verified with coverage.",
+        ("search_history", {"query": "def retries"}),
+        ("read_history", {"entry_id": "turn-1-tool-1:0"}),
+        stage(6),
+        ("run_tests", {"target": "."}),
+        "The earlier validation.py read showed the retry definition.",
+        ("read_file", {"path": CANDIDATE}),
+        stage(6), ("get_coverage", {"target": "."}),
+        {"outcome": "blocked", "summary": "The revision failed."},
+        ("read_file", {"path": CANDIDATE}),
+        stage(5), ("get_coverage", {"target": "."}), ready,
+    ]))
+    config = ModelConfig("scripted")
+    chat = AgentChat(FIXTURE)
+    assert chat.send("Generate the retry test", config).outcome == "ready"
+    original = chat.candidate.copy()
+    chat.send("What does it cover?", config, ask=True)
+    chat.send("Did you collect coverage?", config, ask=True)
+    answer = chat.send("What did the first source read show?", config, ask=True)
+    assert answer.outcome == "answered"
+    assert "validation.py" in answer.unresolved_issues[0]
+    assert "Generate the retry test" not in str(requests[6]["messages"])
+    hits = answer.tool_trace[0]["result"]["results"]
+    assert any(hit["entry_id"] == "turn-1-tool-1:0" for hit in hits)
+    assert "def retries" in answer.tool_trace[1]["result"]["text"]
+    assert all("Unknown tool" in entry["result"]["error"] for entry in answer.tool_trace[2:])
+    names = {tool["function"]["name"] for tool in requests[6]["tools"]}
+    assert not names & {"stage_tests", "run_tests", "get_coverage"}
+    assert chat.candidate == original
+    failed = chat.send("Try a bad assertion", config)
+    assert failed.outcome == "blocked" and chat.candidate == original
+    assert failed.tool_trace[0]["result"]["text"] == original[CANDIDATE]
+    revised = chat.send("Restore the valid assertion", config)
+    assert revised.outcome == "ready" and revised.coverage
+    assert revised.tool_trace[0]["result"]["text"] == original[CANDIDATE]
+    assert not AgentChat(FIXTURE).turns
+
+
+def test_replan_receives_only_four_full_tool_responses(monkeypatch):
+    from unit_agent.retrieval import CLEARED
+
+    reads = [("read_file", {"path": "validation.py"})] * 5
+    requests = setup_model(monkeypatch, enumerate([
+        plan_steps("Inspect retry code"), *reads,
+        {"action": "replan", "summary": "The original test criterion needs review."},
+        plan_steps("Check what evidence is missing"),
+        {"outcome": "unanswerable", "summary": "Please provide the deployment requirement."},
+    ]))
+    result = unit_agent.run_plan_execute(FIXTURE, TASK["question"], ModelConfig("scripted"))
+    assert result.outcome == "unanswerable"
+    planner = requests[-2]
+    assert "tools" not in planner
+    responses = [message for message in planner["messages"] if message["role"] == "tool"]
+    assert [message["content"] == CLEARED for message in responses] == [True, False, False, False, False]
+    assert all("def retries" in item["result"]["text"]
+               for item in result.tool_trace if item.get("tool") == "read_file")

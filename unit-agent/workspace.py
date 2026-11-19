@@ -69,6 +69,18 @@ class Workspace:
             if (definition := self.definition(node)) is not None
         ]
 
+    def read_lines(self, path, start, end):
+        if not 1 <= start <= end or end - start >= 80:
+            raise ValueError("Expected an inclusive line range of at most 80 lines")
+        source = self.read_file(path)
+        lines = source["text"].splitlines()
+        if source["truncated"]:
+            lines = lines[:-1] if not source["text"].endswith("\n") else lines
+        if start > len(lines):
+            raise ValueError("Line range starts beyond the readable file")
+        return {"path": path, "start": start, "end": min(end, len(lines)),
+                "text": "\n".join(lines[start - 1:end]), "truncated": source["truncated"]}
+
     @staticmethod
     def definition(node):
         if isinstance(node, (ast.Import, ast.ImportFrom)):

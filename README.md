@@ -77,6 +77,33 @@ Choose a repository, goal, and method to see the generated diff, verification
 results, run metrics, and tool trace. Use trusted repositories because verification
 runs generated pytest code with your OS permissions.
 
+ReAct and Plan-and-Execute keep a chat in the current Streamlit session. After
+the first preview, use **Ask** for read-only follow-ups or **Revise tests** to
+edit and reverify the current candidate. A failed revision leaves the previous
+verified candidate active. **New chat** clears the conversation and candidate.
+
+## Repository search and memory
+
+ReAct and Plan-and-Execute can search Python, Markdown, and `pyproject.toml`
+in the preview workspace. Search returns excerpts with source paths and line
+ranges. The agent can read the exact lines before using them as evidence.
+Streamlit follow-ups can also search previous questions, answers, diffs, and
+full tool results from that chat. The CLI and Python preview functions run
+one goal at a time.
+
+By default, model requests carry the newest four tool responses in full.
+Older responses become placeholders while the full trace remains available.
+Turn this off with **Clear old tool results** in Streamlit, `--no-memory` in
+the CLI, or `manage_memory=False` in Python. Historical evaluation runs used
+the earlier full-transcript behavior and did not have repository search.
+
+Search uses TF-IDF by default. To enable hybrid repository ranking, run
+`uv sync --extra ui`, then `uv pip install sentence-transformers` and make
+`sentence-transformers/all-MiniLM-L6-v2` available in the local Hugging Face
+cache. Use `uv run --no-sync --extra ui streamlit run app.py --server.address 127.0.0.1`
+to keep that optional dependency installed. Preview runs never download the
+model and fall back to keyword search if embeddings are unavailable.
+
 ## Single-shot baseline
 
 Run one model call with the goal, Python source, and existing tests:

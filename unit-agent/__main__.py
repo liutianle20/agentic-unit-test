@@ -16,10 +16,14 @@ def main():
     parser.add_argument("--goal", required=True)
     methods = {"react": run_agent, "baseline": run_baseline, "plan-execute": run_plan_execute}
     parser.add_argument("--method", choices=methods, default="react")
+    parser.add_argument("--no-memory", action="store_true", help="Send all tool responses to the model.")
     args = parser.parse_args()
+    if args.method == "baseline" and args.no_memory:
+        parser.error("--no-memory applies only to react and plan-execute")
     run = methods[args.method]
+    options = {} if args.method == "baseline" else {"manage_memory": not args.no_memory}
     try:
-        result = run(args.repo, args.goal, ModelConfig.from_env())
+        result = run(args.repo, args.goal, ModelConfig.from_env(), **options)
     except (OSError, ValueError, OpenAIError) as error:
         parser.exit(2, f"{parser.prog}: {error}\n")
     print(json.dumps(asdict(result), indent=2, ensure_ascii=False))
