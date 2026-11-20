@@ -2,7 +2,7 @@
 name = "agentic-unit-test"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["langgraph", "openai", "pytest", "pytest-cov"]
+dependencies = ["langgraph", "openai", "pytest", "pytest-cov", "scikit-learn"]
 
 [project.optional-dependencies]
 ui = ["streamlit>=1.36"]
