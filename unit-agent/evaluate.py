@@ -13,6 +13,7 @@ from openai import OpenAI, OpenAIError
 
 from . import AgentResult, ModelConfig, _final_json, _preview_workspace
 from .eval_records import SCHEMA_VERSION, TASK_FIELDS, TRIALS, Progress, describe_tasks, task_keys, write_record
+from .security import redact_data
 
 STANDARD_CHECKS = ["Correct", "Grounded", "Complete", "In policy"]
 
@@ -372,6 +373,7 @@ def run_evaluation(input_dir, output, config, judge):
             task = by_id[saved["task_id"]]
             record = evaluate_attempt(task, saved, config, judge)
             record = structure_attempt(record, task, model, config.model)
+            record, _ = redact_data(record)
             records.append(record)
             write_record(log, record)
             progress.update(completed)

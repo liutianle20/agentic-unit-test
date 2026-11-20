@@ -11,12 +11,18 @@ from openai import OpenAIError
 from . import ModelConfig, run_agent, run_plan_execute
 from .baseline import run_baseline
 from .eval_records import SCHEMA_VERSION, TRIALS, Progress, describe_tasks, read_tasks, task_keys, write_record
+from .security import redact_data
 
 
 def collect_attempts(tasks, output, config, *, generators=None):
     if generators is None:
         generators = {"baseline": run_baseline, "react": run_agent, "plan-execute": run_plan_execute}
     descriptions = describe_tasks(tasks)
+    for description in descriptions:
+        safe_fields, _ = redact_data({
+            "question": description["question"], "rubric": description["rubric"],
+        })
+        description.update(safe_fields)
     by_id = {task["id"]: task for task in descriptions}
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -45,7 +51,7 @@ def collect_attempts(tasks, output, config, *, generators=None):
                 "task_id": task_id, "task": task, "method": method, "trial": trial,
                 "model": config.model, "generation_seconds": elapsed,
                 "generation": generation, "failure_reason": failure,
-            })
+            }, preserve_task_fixture=True)
             progress.update(completed)
 
 

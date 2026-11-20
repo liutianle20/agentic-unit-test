@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+from .security import redact_data
 from .workspace import ignore_files
 
 SCHEMA_VERSION = 1
@@ -71,8 +72,18 @@ def describe_tasks(tasks):
     ]
 
 
-def write_record(log, row):
-    log.write(json.dumps(row, ensure_ascii=False) + "\n")
+def write_record(log, row, *, preserve_task_fixture=False):
+    safe_row, _ = redact_data(row)
+    if preserve_task_fixture:
+        for key in ("schema_version", "task_id", "method", "trial", "model",
+                    "generation_seconds"):
+            if key in row:
+                safe_row[key] = row[key]
+        if isinstance(row.get("task"), dict) and isinstance(safe_row.get("task"), dict):
+            for key in ("id", "type", "fixture", "tags", "fixture_fingerprint"):
+                if key in row["task"]:
+                    safe_row["task"][key] = row["task"][key]
+    log.write(json.dumps(safe_row, ensure_ascii=False) + "\n")
     log.flush()
 
 

@@ -8,6 +8,7 @@ import streamlit as st
 from unit_agent import ModelConfig
 from unit_agent.baseline import run_baseline
 from unit_agent.chat import AgentChat
+from unit_agent.security import redact_sensitive_text
 
 
 METHODS = ("ReAct", "Plan-and-Execute", "Single-shot baseline")
@@ -73,6 +74,7 @@ def main():
         if not defaults.api_key:
             st.info("Set OPENAI_API_KEY in the environment and restart Streamlit.")
         st.caption("Use trusted repositories. Verification executes generated Python locally.")
+        st.caption("Safety checks are educational defense in depth, not an OS sandbox.")
 
     ask = False
     if chat is None:
@@ -102,7 +104,10 @@ def main():
             with st.spinner("Working…"):
                 if method == "Single-shot baseline" and chat is None:
                     result = run_baseline(repository, goal.strip(), config)
-                    st.session_state["baseline_result"] = (repository, goal.strip(), config.model, result)
+                    display_goal, _ = redact_sensitive_text(goal.strip())
+                    st.session_state["baseline_result"] = (
+                        repository, display_goal, config.model, result,
+                    )
                 else:
                     current = chat or AgentChat(repository, plan_execute=method == "Plan-and-Execute")
                     result = current.send(goal, config, ask=ask, manage_memory=manage_memory)

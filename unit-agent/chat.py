@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import AgentResult, ModelConfig, run_chat_turn
+from .security import redact_sensitive_text
 
 
 @dataclass
@@ -29,5 +30,11 @@ class AgentChat:
             answer = f"Outcome: {result.outcome}."
             if result.unresolved_issues:
                 answer += " " + " ".join(result.unresolved_issues)
-        self.turns.append((question, answer, result))
+        display_question, _ = redact_sensitive_text(question)
+        if any(
+            event.get("event") == "security_block" and event.get("source") == "user_goal"
+            for event in result.tool_trace
+        ):
+            display_question = "[BLOCKED: possible prompt injection detected]"
+        self.turns.append((display_question, answer, result))
         return result

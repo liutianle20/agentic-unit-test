@@ -54,7 +54,8 @@ uv run unit-agent --repo fixtures/sample_project --goal "Test the maximum allowe
 
 The CLI prints a JSON preview, including the staged diff and verification results. For Python callers, import `ModelConfig` and `run_agent` from `unit_agent`. Credentials can be read from the environment with `ModelConfig.from_env()`.
 
-Use trusted repositories. Pytest executes generated Python in a temporary copy with a timeout and a limited environment. The subprocess still runs with the current user's OS permissions.
+Use trusted repositories. The safety layer rejects obvious unsafe generated tests,
+but pytest still runs with the current user's OS permissions.
 
 Run the scripted acceptance checks with `uv run python -m pytest -q tests`.
 
@@ -103,6 +104,38 @@ Search uses TF-IDF by default. To enable hybrid repository ranking, run
 cache. Use `uv run --no-sync --extra ui streamlit run app.py --server.address 127.0.0.1`
 to keep that optional dependency installed. Preview runs never download the
 model and fall back to keyword search if embeddings are unavailable.
+
+## Educational safety layer
+
+The project includes small, readable controls for four common LLM application
+risks. They are deliberately simple enough to study and test:
+
+- **LLM01 — prompt injection:** high-confidence instruction-override patterns in
+  the goal are blocked before a model call. Repository content is labeled as
+  untrusted; suspicious content is withheld and stops the run instead of being
+  forwarded to the model.
+- **LLM02 — sensitive information disclosure:** common credential files and key
+  formats are excluded, and common tokens, private keys, email addresses, and
+  US Social Security numbers are redacted from model context, subprocess output,
+  summaries, and traces. Generated tests containing detected sensitive values
+  are rejected.
+- **LLM06 — excessive agency:** the agent has a fixed tool allowlist, workspace-
+  relative paths, test-only writes, time/turn/repair budgets, and a reduced pytest
+  environment. An AST check rejects obvious command execution, network clients,
+  destructive file operations, dynamic code execution, and absolute file reads
+  before a generated test can run.
+- **LLM09 — misinformation:** `ready` is determined by code, not by the model: the
+  agent must inspect repository evidence, and the latest staged revision must pass
+  pytest and produce coverage. The baseline is labeled `staged` because it is not
+  executed, and missing requirements produce `unanswerable` rather than invented
+  behavior. Passing tests are evidence about this local fixture only, not proof of
+  an external policy or real-world fact.
+
+These controls are defense in depth, not a production sandbox. Static checks can
+be bypassed by sufficiently creative Python, and imported project code can itself
+perform side effects. A production service should execute tests in an isolated
+container or VM with network disabled, read-only mounts, resource limits, and no
+host credentials.
 
 ## Single-shot baseline
 
