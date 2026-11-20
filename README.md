@@ -192,3 +192,8 @@ same tools and workspace as ReAct.
 uv run unit-agent --method plan-execute \
   --repo fixtures/sample_project --goal "Test the maximum allowed retries."
 ```
+
+## TODOs
+
+- Allow multiple tool calls per turn in both ReAct and Plan-and-Execute.
+- 

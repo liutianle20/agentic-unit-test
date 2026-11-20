@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Unit Testing</title>
+<style>
+:root{color-scheme:light;--paper:#f7f7f2;--ink:#162b25;--muted:#435c54;--accent:#176347;--rule:#afbeb4;--wash:#e1eee5;font-family:Arial,sans-serif}
+*{box-sizing:border-box}
+html,body{background:var(--paper)}
+body{margin:0;color:var(--ink)}
+main{min-height:100dvh;display:grid;place-items:center}
+.slide{container-type:inline-size;width:min(100vw,177.78dvh);aspect-ratio:16/9;background:var(--paper);padding:min(3.5vw,6.22dvh) min(4.5vw,8dvh) min(2.7vw,4.8dvh);position:relative}
+.slide[hidden]{display:none}
+h1,h2{font-size:4.5cqw;line-height:1.05;margin:0 0 1.6cqw;letter-spacing:-.045em}
+.slide :is(h1,h2)[tabindex="-1"]:focus{outline:none}
+h3{font-size:2.05cqw;margin:0 0 .6cqw}
+p{margin:0 0 1cqw;line-height:1.31}
+p,li,th,td,dd,dt{font-size:1.77cqw}
+small,.caption{font-size:1.34cqw;color:var(--muted)}
+.time{font-size:1.25cqw;color:var(--accent);font-weight:bold;letter-spacing:.065em;margin-bottom:1.05cqw}
+.columns{display:grid;grid-template-columns:1fr 1fr;gap:3cqw}
+.hero{font-size:2.8cqw;font-weight:bold;color:var(--accent);margin-bottom:2cqw}
+pre{font:1.74cqw/1.45 ui-monospace,monospace;white-space:pre-wrap;background:#182d25;color:#e1f3e5;padding:1.35cqw;margin:0 0 1cqw}
+code{font-family:ui-monospace,monospace}
+ul{padding-left:1.4em;margin:.4cqw 0 1cqw}
+li{margin:.42cqw 0;line-height:1.22}
+table{width:100%;border-collapse:collapse;text-align:left;margin:.6cqw 0 1cqw}
+th,td{border-bottom:1px solid var(--rule);padding:.53cqw .75cqw;vertical-align:top}
+th{color:var(--accent)}
+.metrics th,.metrics td{padding:.4cqw .75cqw;font-size:1.62cqw}
+.metrics th:nth-child(3),.metrics td:nth-child(3){background:var(--wash)}
+.workflow{margin:0}
+.workflow svg{display:block;width:100%;height:auto}
+.workflow figcaption{margin-top:.7cqw;line-height:1.25}
+.workflow figcaption strong{color:var(--ink)}
+.workflow-edges path{fill:none;stroke:#435c54;stroke-width:1.7;marker-end:url(#workflow-arrow)}
+.workflow-node rect{fill:#e1eee5;stroke:#176347;stroke-width:1.2}
+.workflow-node.base rect,.workflow-node.outcome rect{fill:#f7f7f2;stroke:#6e847a}
+.workflow-node.input rect,.workflow-node.success rect{fill:#176347}
+.workflow-node text{text-anchor:middle;fill:#162b25;font-size:15px}
+.workflow-node.input text,.workflow-node.success text{fill:white}
+.workflow-node-title{font-size:17px;font-weight:bold}
+.workflow-label{font-size:14px;fill:#435c54;paint-order:stroke;stroke:#f7f7f2;stroke-width:6;stroke-linejoin:round}
+.band{border-top:2px solid var(--accent);padding-top:.8cqw;margin-top:1cqw}
+@media screen and (max-width:670px) and (orientation:portrait){
+  main{display:block}
+  .slide{width:100%;min-height:100dvh;aspect-ratio:auto;padding:6% 5%}
+  .time,small,.caption{font-size:3.2cqw}
+  h1,h2{font-size:8cqw;margin-bottom:4cqw}
+  h3,.hero{font-size:4.9cqw;margin-bottom:2cqw}
+  p,li,th,td,dd,dt,pre{font-size:3.8cqw}
+  p,pre,li{margin-bottom:2cqw}
+  .columns{grid-template-columns:1fr}
+  .workflow{overflow-x:auto}
+  .workflow svg{min-width:680px}
+  .metrics th,.metrics td{font-size:3.1cqw}
+}
+@page{size:13.333in 7.5in;margin:0}
+@media print{
+  body,main{display:block;background:white}
+  .slide,.slide[hidden]{display:block;width:100%;padding:3.5% 4.5% 2.7%;break-after:page;print-color-adjust:exact}
+  .slide:last-child{break-after:auto}
+}
+</style>
+</head>
+<body>
+<main>
+<section class="slide" aria-labelledby="problem">
+  <p class="time">Problem</p>
+  <h1 id="problem">Agentic Unit Testing</h1>
+  <p class="hero">“Test the maximum allowed retries.”</p>
+  <div class="columns">
+    <div>
+      <h3>What the developer has to establish</h3>
+      <ul>
+        <li>Find the validator and read the <code>retries()</code> contract.</li>
+        <li>It accepts integers from 0 through 5 and rejects booleans.</li>
+        <li>Choose the upper boundary, assert its expected value, then run pytest and investigate failures.</li>
+      </ul>
+      <h3>Input to the agent</h3>
+      <p>A Python repository path, a plain-language test goal, and model configuration.</p>
+    </div>
+    <div>
+      <h3>Example test file</h3>
+      <p class="caption"><code>tests/test_agent_retries.py</code></p>
+      <pre><code>from validation import retries
+
+def test_maximum_allowed_retries():
+    assert retries(5) == 5</code></pre>
+      <h3>What the developer gets back</h3>
+      <p>Proposed test files, the outcome, tool trace, unresolved issues, and pytest and coverage results when available.</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" hidden aria-labelledby="workflow">
+  <p class="time">Design</p>
+  <h2 id="workflow">Test generation workflows</h2>
+  <figure class="workflow">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 445" role="img" aria-labelledby="workflow-title workflow-description">
+      <title id="workflow-title">Single-shot and agent test generation control flow</title>
+      <desc id="workflow-description">Single-shot generates test files in one call for offline grading. ReAct chooses its next action from tool feedback. Plan-and-Execute follows an ordered plan and replans when evidence invalidates a step. Both agents stage test files in a temporary copy and run pytest and coverage. Verification failure loops back for repair when budget remains. Missing evidence and exhausted budgets return separate outcomes. The benchmark evaluator grades saved results from all modes.</desc>
+      <defs><marker id="workflow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#435c54"/></marker></defs>
+      <g class="workflow-edges" aria-hidden="true">
+        <path d="M550 44 V57 H146 V78"/>
+        <path d="M550 44 V78"/>
+        <path d="M550 57 H880 V78"/>
+        <path d="M146 132 V158"/>
+        <path d="M550 132 V158"/>
+        <path d="M880 132 V143 H550 V158"/>
+        <path d="M550 212 V231"/>
+        <path d="M674 185 H880 V231"/>
+        <path d="M550 281 V301"/>
+        <path d="M550 351 V374"/>
+        <path d="M674 326 H742"/>
+        <path d="M674 317 H704 V218 H627 V212"/>
+        <path d="M146 212 V405 H198"/>
+        <path d="M426 402 H383"/>
+        <path d="M880 281 H1066 V439 H290 V430"/>
+        <path d="M880 351 V439"/>
+      </g>
+      <g class="workflow-node input">
+        <rect x="426" y="0" width="248" height="44" rx="5"/>
+        <text x="550" y="27" class="workflow-node-title">Repository path + test goal</text>
+      </g>
+      <g class="workflow-node base">
+        <rect x="7" y="78" width="278" height="54" rx="5"/>
+        <text x="146" y="101" class="workflow-node-title">Single-shot</text>
+        <text x="146" y="120">One call with goal, source, tests</text>
+      </g>
+      <g class="workflow-node agent">
+        <rect x="426" y="78" width="248" height="54" rx="5"/>
+        <text x="550" y="101" class="workflow-node-title">ReAct</text>
+        <text x="550" y="120">Choose the next tool from feedback</text>
+      </g>
+      <g class="workflow-node agent">
+        <rect x="742" y="78" width="276" height="54" rx="5"/>
+        <text x="880" y="101" class="workflow-node-title">Plan-and-Execute</text>
+        <text x="880" y="120">Plan first, then execute each step</text>
+      </g>
+      <g class="workflow-node base">
+        <rect x="7" y="158" width="278" height="54" rx="5"/>
+        <text x="146" y="181" class="workflow-node-title">Stage generated test files</text>
+        <text x="146" y="200">Save attempt for offline grading</text>
+      </g>
+      <g class="workflow-node agent">
+        <rect x="426" y="158" width="248" height="54" rx="5"/>
+        <text x="550" y="181" class="workflow-node-title">Inspect repository evidence</text>
+        <text x="550" y="200">Search excerpts, read exact lines</text>
+      </g>
+      <g class="workflow-node agent">
+        <rect x="426" y="231" width="248" height="50" rx="5"/>
+        <text x="550" y="252" class="workflow-node-title">Stage test files</text>
+        <text x="550" y="271">Write to a temporary copy</text>
+      </g>
+      <g class="workflow-node outcome">
+        <rect x="742" y="231" width="276" height="50" rx="5"/>
+        <text x="880" y="252" class="workflow-node-title">Missing contract</text>
+        <text x="880" y="271">Ask for the specification</text>
+      </g>
+      <g class="workflow-node agent">
+        <rect x="426" y="301" width="248" height="50" rx="5"/>
+        <text x="550" y="322" class="workflow-node-title">Verify latest test files</text>
+        <text x="550" y="341">Run pytest and measure coverage</text>
+      </g>
+      <g class="workflow-node outcome">
+        <rect x="742" y="301" width="276" height="50" rx="5"/>
+        <text x="880" y="322" class="workflow-node-title">Unresolved</text>
+        <text x="880" y="341">Return failure or budget limit</text>
+      </g>
+      <g class="workflow-node success">
+        <rect x="426" y="374" width="248" height="56" rx="5"/>
+        <text x="550" y="398" class="workflow-node-title">Ready</text>
+        <text x="550" y="417">Return test files and evidence</text>
+      </g>
+      <g class="workflow-node base">
+        <rect x="198" y="374" width="185" height="56" rx="5"/>
+        <text x="290.5" y="398" class="workflow-node-title">Offline evaluator</text>
+        <text x="290.5" y="417">Grade saved attempts</text>
+      </g>
+      <text class="workflow-label" x="560" y="224" text-anchor="start">Contract found</text>
+      <text class="workflow-label" x="725" y="177" text-anchor="start">Evidence gap</text>
+      <text class="workflow-label" x="714" y="294" text-anchor="start">Verification failed</text>
+      <text class="workflow-label" x="562" y="367" text-anchor="start">Pass</text>
+      <text class="workflow-label" x="706" y="343" text-anchor="middle">Stop</text>
+    </svg>
+    <figcaption class="caption columns">
+      <div><strong>ReAct.</strong> Each tool result guides the next action. A failed check can trigger more inspection or a test edit.</div>
+      <div><strong>Plan-and-Execute.</strong> An ordered plan guides each step. The agent replans if new evidence or a failed check invalidates a step.</div>
+    </figcaption>
+  </figure>
+</section>
+
+<section class="slide" hidden aria-labelledby="memory-system security-constraints">
+  <p class="time">Design</p>
+  <div class="columns">
+    <div>
+      <h2 id="memory-system">Memory System</h2>
+      <ul>
+        <li><strong>Agentic RAG.</strong> The agent searches the repository on demand, ranks excerpts with TF-IDF, and checks exact source lines as needed.</li>
+        <li><strong>Run context.</strong> Keep the four newest tool responses in full by default. Preserve the full trace for inspection.</li>
+        <li><strong>Streamlit session.</strong> Keeps the latest verified test files and searchable history. Ask uses that history to answer follow-up questions. Revise tests updates the files in a fresh temporary copy and verifies them again.</li>
+      </ul>
+    </div>
+    <div>
+      <h2 id="security-constraints">Security Constraints</h2>
+      <ul>
+        <li>Screen instruction overrides and suspicious repository content. Exclude common credential files and redact sensitive patterns.</li>
+        <li>Limit writes to <code>tests/test_agent_*.py</code>. Bound tool use, time, and repair attempts.</li>
+        <li>Check generated Python before execution and run pytest with a reduced environment.</li>
+        <li>Mark the latest test files <code>ready</code> only with repository evidence, passing pytest, and fresh coverage.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="caption band">The saved benchmark predates repository search and used the earlier full tool transcript.</p>
+</section>
+
+<section class="slide" hidden aria-labelledby="grading">
+  <p class="time">Evaluation</p>
+  <h2 id="grading">Benchmark tasks and grading</h2>
+  <p><strong>50 tasks testing a Python batch-import codebase.</strong> 350 saved attempts across one baseline run and three runs per agent.</p>
+  <p>The codebase validates inputs, parses records, and looks up counts through a client.</p>
+  <table>
+    <thead><tr><th scope="col">Task group</th><th scope="col">Count</th><th scope="col">Example requirement</th></tr></thead>
+    <tbody>
+      <tr><td>Validation</td><td>16</td><td><code>retries(5)</code> returns <code>5</code> and <code>retries(6)</code> raises <code>ValueError</code>.</td></tr>
+      <tr><td>Parsing</td><td>16</td><td><code>parse_record('blue:007')</code> returns <code>('blue', 7)</code>.</td></tr>
+      <tr><td>Dependency behavior</td><td>16</td><td>A mock raises <code>KeyError</code> on the first call and returns <code>6</code> on the second.</td></tr>
+      <tr><td>Unanswerable</td><td>2</td><td>Ask for the missing production retry-delay specification.</td></tr>
+    </tbody>
+  </table>
+  <div class="columns band">
+    <div>
+      <h3>1. Automated checks</h3>
+      <p>Recreate the generated test files in a fresh copy of the Python codebase. Require pytest to pass with coverage and collect at least one generated test. For missing requirements, require <code>unanswerable</code>, no generated test files, and an explanation.</p>
+    </div>
+    <div>
+      <h3>2. Separate model judge</h3>
+      <p>Review correctness, grounding in evidence from the Python codebase, completeness, policy, and the task-specific rubric. Every applicable check must pass.</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" hidden aria-labelledby="results">
+  <p class="time">Evaluation</p>
+  <h2 id="results">ReAct passed 29 of 50 tasks</h2>
+  <table class="metrics">
+    <thead><tr><th scope="col">Metric</th><th scope="col">Single-shot</th><th scope="col">ReAct, trial 1</th><th scope="col">Plan-and-Execute, trial 1</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Task accuracy</th><td>46.0% (23/50)</td><td><strong>58.0% (29/50)</strong></td><td>56.0% (28/50)</td></tr>
+      <tr><th scope="row">Average model turns</th><td>1.00</td><td>7.54</td><td>10.12</td></tr>
+      <tr><th scope="row">Average generation latency</th><td>5.26 s</td><td>16.14 s</td><td>30.35 s</td></tr>
+      <tr><th scope="row">95th-percentile generation latency</th><td>13.01 s</td><td>29.78 s</td><td>50.40 s</td></tr>
+      <tr><th scope="row">Average tokens</th><td>1,622.30</td><td>25,750.98</td><td>35,398.80</td></tr>
+      <tr><th scope="row">Generated tests passed / collected</th><td>134 / 134</td><td>442 / 442</td><td>446 / 446</td></tr>
+      <tr><th scope="row">Mean production line coverage</th><td>37.22%</td><td>48.54%</td><td>48.48%</td></tr>
+      <tr><th scope="row">Mean production branch coverage</th><td>21.70%</td><td>34.20%</td><td>34.96%</td></tr>
+    </tbody>
+  </table>
+  <p class="caption">Latency and tokens exclude offline grading. Test counts cover 48, 48, and 46 attempts respectively. Plan-and-Execute token data covers 49 of 50 attempts. Coverage averages use available measurements.</p>
+  <div class="columns band">
+    <p><strong>Accuracy measures the requested behavior.</strong> Pytest counts show which generated tests ran and passed. The judge checks whether they met the task.</p>
+    <p><strong>Coverage measures execution reach.</strong> Line coverage counts statements exercised. Branch coverage counts decision paths exercised.</p>
+  </div>
+  <p class="caption">Across three trials, ReAct solved 32/50 tasks at least once and Plan-and-Execute solved 34/50. Each solved 22/50 in all three trials.</p>
+</section>
+</main>
+<!-- Narration from presentation/script.md, embedded for offline use. -->
+<template id="notes-1">
+  <p class="notes-cue">0:00–0:25 · Problem</p>
+  <p class="notes-cue">Slide 1. Show the prompt and the example Python test file.</p>
+  <p>Our Python batch-import codebase validates inputs, parses records, and looks up counts. A developer asks, “Test the maximum allowed retries.” They&#x27;d normally find the validator, confirm the limit, write the test, and run pytest. Give the agent the codebase and that request. It returns a test file and verification results, automating the whole workflow. The agent can also answer follow-up questions and revise the tests.</p>
+</template>
+<template id="notes-2">
+  <p class="notes-cue">0:25–0:52 · Generation workflows</p>
+  <p class="notes-cue">Slide 2. Trace the single-shot baseline, then compare the two agents.</p>
+  <p>The single-shot baseline sends the goal, source code, and existing tests in one model call. The evaluator runs those test files later.</p>
+  <p>ReAct chooses its next action from tool feedback. Plan-and-Execute starts with an ordered plan and can revise it as evidence changes. Both run pytest and measure coverage in a temporary copy.</p>
+</template>
+<template id="notes-3">
+  <p class="notes-cue">0:52–1:10 · Memory and security</p>
+  <p class="notes-cue">Slide 3. Point to the Memory System and Security Constraints columns.</p>
+  <p>Agentic RAG finds relevant code on demand. The Streamlit session keeps history for follow-up questions and test revisions. Safety checks restrict where the agent can write, screen the generated code, and require fresh verification.</p>
+</template>
+<template id="notes-4">
+  <p class="notes-cue">1:10–1:33 · Benchmark and grading</p>
+  <p class="notes-cue">Slide 4. Show the task counts, then point to the automated checks and model judge.</p>
+  <p>Each method got the same fifty tasks: sixteen each on validation, parsing, and dependency behavior, plus two with missing requirements. Single-shot ran once per task. Each agent ran three times. The shared grader ran pytest on generated test files. A separate model judge checked task rubrics and missing-requirement explanations.</p>
+</template>
+<template id="notes-5">
+  <p class="notes-cue">1:33–2:00 · Results</p>
+  <p class="notes-cue">Slide 5. Highlight task accuracy, coverage, and generation cost.</p>
+  <p>Pytest counts show how many generated tests passed. Line coverage shows which statements ran, and branch coverage shows which decision paths ran. Together they measure how well the generated tests exercised the codebase.</p>
+  <p>ReAct passed fifty-eight percent of tasks versus forty-six percent for single-shot. ReAct averaged sixteen seconds, about eight model turns, and twenty-six thousand tokens. Single-shot averaged five seconds, one turn, and sixteen hundred tokens.</p>
+</template>
+<script>
+const slides = [...document.querySelectorAll('.slide')];
+let presenterWindow = null;
+let current = 0;
+
+slides.forEach((slide, index) => {
+  slide.id = `slide-${index + 1}`;
+});
+
+function updateNotes() {
+  if (!presenterWindow || presenterWindow.closed) return;
+  const template = document.querySelector(`#notes-${current + 1}`);
+  const presenterDocument = presenterWindow.document;
+  presenterDocument.querySelector('#notes-content').replaceChildren(
+    presenterDocument.importNode(template.content, true)
+  );
+  presenterWindow.scrollTo(0, 0);
+}
+
+function togglePresenter() {
+  if (presenterWindow && !presenterWindow.closed) {
+    presenterWindow.close();
+    presenterWindow = null;
+    return;
+  }
+
+  presenterWindow = window.open('', 'agentic-unit-testing-presenter', 'popup,width=640,height=720');
+  if (!presenterWindow) {
+    window.alert('Allow pop-ups for this page, then press P again.');
+    return;
+  }
+
+  const presenterDocument = presenterWindow.document;
+  presenterDocument.open();
+  presenterDocument.write(`<!doctype html>
+    <html lang="en">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Presenter notes</title>
+    <style>
+      body{margin:0;padding:2rem;background:#f7f7f2;color:#162b25;font-family:Arial,sans-serif}
+      h1{font-size:1.5rem;margin:0 0 1.25rem}
+      p{font-size:1.25rem;line-height:1.5;margin:0 0 1rem}
+      .notes-cue{color:#435c54;font-size:1rem}
+    </style>
+    <h1>Presenter notes</h1>
+    <div id="notes-content"></div>
+    </html>`);
+  presenterDocument.close();
+  presenterDocument.addEventListener('keydown', handleShortcut);
+  updateNotes();
+  presenterWindow.focus();
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+    } else if (document.fullscreenEnabled) {
+      await document.documentElement.requestFullscreen();
+    }
+  } catch (error) {
+    console.warn('Fullscreen could not be changed.', error);
+  }
+}
+
+function show(index, focus = false) {
+  if (!slides[index]) return;
+  current = index;
+  slides.forEach((slide, offset) => { slide.hidden = offset !== index; });
+  updateNotes();
+  history.replaceState(null, '', `#slide-${index + 1}`);
+  if (focus) {
+    const heading = slides[index].querySelector('h1,h2');
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
+  }
+}
+
+function showFromHash() {
+  const index = Number(location.hash.match(/^#slide-(\d+)$/)?.[1] ?? 1) - 1;
+  show(slides[index] ? index : 0);
+}
+
+window.addEventListener('hashchange', showFromHash);
+function handleShortcut(event) {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
+  const key = event.key.toLowerCase();
+  if (key === 'p' || (key === 'f' && event.currentTarget === document)) {
+    event.preventDefault();
+    if (!event.repeat) {
+      if (key === 'f') void toggleFullscreen();
+      else togglePresenter();
+    }
+    return;
+  }
+  const shortcut = { ArrowRight: current + 1, ArrowLeft: current - 1, PageDown: current + 1, PageUp: current - 1, Home: 0, End: slides.length - 1 };
+  if (Object.hasOwn(shortcut, event.key)) {
+    event.preventDefault();
+    show(shortcut[event.key], true);
+  }
+}
+document.addEventListener('keydown', handleShortcut);
+window.addEventListener('pagehide', () => presenterWindow?.close());
+showFromHash();
+</script>
+</body>
+</html>
